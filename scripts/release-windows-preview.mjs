@@ -37,7 +37,21 @@ const notes = [
 mkdirSync(".converter-build", { recursive: true });
 const notesFile = path.resolve(".converter-build/windows-release-notes.md");
 writeFileSync(notesFile, notes, "utf8");
-execFileSync("gh", ["release", "create", tag, file, "--repo", repo, "--target", head, "--title", `Zion PDF ${pkg.version} for Windows`, "--notes-file", notesFile, "--latest"], { stdio: "inherit", windowsHide: true });
+// A network failure can leave a draft behind. Resume that draft without replacing a
+// completed asset, and publish it only after GitHub has received the full file.
+const releases = JSON.parse(run("gh", ["api", `repos/${repo}/releases?per_page=100`]));
+const existing = releases.find(item => item.tag_name === tag);
+if (existing) {
+  if (!existing.draft) throw new Error(`A release for ${tag} already exists. Review it before making changes.`);
+  const previous = existing.assets?.find(item => item.name === path.basename(file));
+  if (previous && (previous.state !== "uploaded" || previous.size !== statSync(file).size || (previous.digest && previous.digest.toLowerCase() !== `sha256:${digest.toLowerCase()}`))) {
+    throw new Error("The draft contains an incomplete or different installer. Review it before retrying.");
+  }
+  if (!previous) execFileSync("gh", ["release", "upload", tag, file, "--repo", repo], { stdio: "inherit", windowsHide: true });
+  execFileSync("gh", ["release", "edit", tag, "--repo", repo, "--target", head, "--title", `Zion PDF ${pkg.version} for Windows`, "--notes-file", notesFile, "--draft=false", "--latest"], { stdio: "inherit", windowsHide: true });
+} else {
+  execFileSync("gh", ["release", "create", tag, file, "--repo", repo, "--target", head, "--title", `Zion PDF ${pkg.version} for Windows`, "--notes-file", notesFile, "--latest"], { stdio: "inherit", windowsHide: true });
+}
 const release = JSON.parse(run("gh", ["api", `repos/${repo}/releases/tags/${tag}`]));
 const asset = release.assets?.find(item => item.name === path.basename(file));
 if (release.draft || release.prerelease || !asset || asset.state !== "uploaded" || asset.size !== statSync(file).size || (asset.digest && asset.digest.toLowerCase() !== `sha256:${digest.toLowerCase()}`)) {
