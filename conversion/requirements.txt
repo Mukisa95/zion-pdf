@@ -1,0 +1,8 @@
+# CPU wheels are installed first by scripts/build-converter.mjs.
+docling==2.145.0
+docling-slim==2.145.0
+docling-core==2.105.0
+docling-ibm-models==4.0.4
+docling-parse==7.24.2
+pypdf==6.21.4
+pyinstaller==6.22.3

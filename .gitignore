@@ -1,0 +1,20 @@
+node_modules
+dist
+public/pdfjs
+public/pdfium-licenses
+release
+release-test
+release-*/
+dev-app-update.yml
+.converter-build/
+conversion/runtime/
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.pem
+*.key
+Glossy Red PDF Document Icon.png
+advanced_offline_pdf_editor_implementation_plan.md
+docs/pdf-editor-implementation-plan.md

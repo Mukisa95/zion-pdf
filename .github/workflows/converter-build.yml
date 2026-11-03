@@ -1,0 +1,43 @@
+name: Offline Word converter
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  converter:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+          - os: macos-15-intel
+            platform: darwin
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: node scripts/build-converter.mjs
+      - name: Archive runtime with executable permissions
+        shell: bash
+        run: tar -cf converter-${{ matrix.platform }}-${{ matrix.arch }}.tar -C conversion/runtime ${{ matrix.platform }}-${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: converter-${{ matrix.platform }}-${{ matrix.arch }}
+          path: converter-${{ matrix.platform }}-${{ matrix.arch }}.tar
+          retention-days: 7

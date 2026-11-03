@@ -1,0 +1,35 @@
+import {useEffect,useId,useRef,useState} from "react";
+import type {Worker as OcrWorker} from "tesseract.js";
+import {createOcrEngine,recognizeFrame} from "./ocrRecognition";
+import type {OcrRaster} from "./OcrPanel";
+import {inkRemovalOverlay} from "./editor/ocrAppearance";
+import {parseOcrPages} from "./editor/ocrPages";
+import type {OcrLine,OcrBackground} from "./editor/ocrPdf";
+export function DocumentOcrPanel({count,current,raster,convert,apply,onWorking,onClose}:{count:number;current:number;raster:(page:number,backgroundOnly?:boolean)=>Promise<OcrRaster>;convert:(data:Uint8Array|undefined,page:number,lines:OcrLine[],background?:OcrBackground)=>Promise<Uint8Array>;apply:(data:Uint8Array,pages:number[])=>Promise<void>;onWorking:(working:boolean)=>void;onClose:()=>void}){
+  const radioId=useId();
+  const [scope,setScope]=useState("whole"),[range,setRange]=useState(String(current)),[keep,setKeep]=useState("image"),[layout,setLayout]=useState("auto"),[running,setRunning]=useState(false),[applying,setApplying]=useState(false),[error,setError]=useState(""),[status,setStatus]=useState(""),[progress,setProgress]=useState(0),[results,setResults]=useState<{page:number;lines:number;confidence:number}[]>([]);
+  const worker=useRef<OcrWorker|null>(null),epoch=useRef(0),draft=useRef<Uint8Array|null>(null),working=useRef(false);
+  useEffect(()=>()=>{epoch.current++;void worker.current?.terminate();if(working.current)onWorking(false);},[]);
+  const cancel=()=>{epoch.current++;void worker.current?.terminate();worker.current=null;draft.current=null;setRunning(false);working.current=false;setResults([]);setStatus("");onWorking(false);};
+  const run=async()=>{let pages:number[];try{pages=scope==="whole"?Array.from({length:count},(_,i)=>i+1):parseOcrPages(range,count);}catch(reason){setError((reason as Error).message);return;}const token=++epoch.current;setRunning(true);working.current=true;onWorking(true);setError("");setResults([]);draft.current=null;let instance:OcrWorker|undefined,done=0,existingText=false;
+    try{instance=await createOcrEngine((status,amount)=>{if(token===epoch.current){setStatus(`Page ${pages[done]} of ${count}: ${status}`);setProgress((done+amount)/pages.length);}});if(token!==epoch.current)return;worker.current=instance;let data:Uint8Array|undefined;
+      for(const page of pages){setStatus(`Page ${page} of ${count}: preparing page`);const image=await raster(page);if(token!==epoch.current)return;const {lines,masks}=await recognizeFrame(instance,image,layout);if(token!==epoch.current)return;let background:OcrBackground|undefined;
+        const nativeCount=image.nativeText?.length || 0;existingText ||= nativeCount>0;if(keep==="image"&&lines.length)background=inkRemovalOverlay(image,masks);
+        // Pages with no detected text stay untouched; a missed OCR result must not erase a page.
+        if(lines.length||nativeCount&&keep==="text"){data=await convert(data,page,lines,background);if(data.byteLength>300*1024*1024)throw new Error("The converted PDF exceeds 300 MB. Convert fewer pages at a time.");}
+        if(token!==epoch.current)return;setResults(previous=>[...previous,{page,lines:lines.length+nativeCount,confidence:lines.length?lines.reduce((sum,line)=>sum+line.confidence,0)/lines.length:100}]);done++;setProgress(done/pages.length);
+      }
+      if(!data){if(existingText){setStatus("The detected text is already editable. No new image text was found.");return;}throw new Error("No readable text was detected. The document has not been changed.");}draft.current=data;setStatus("Ready to apply. Review the converted pages before saving a copy.");
+    }catch(reason){if(token===epoch.current){draft.current=null;setError(reason instanceof Error?reason.message:"Page OCR failed.");}}finally{if(instance)await instance.terminate().catch(()=>{});if(worker.current===instance)worker.current=null;if(token===epoch.current){setRunning(false);working.current=false;onWorking(false);}}
+  };
+  return <section className="ocr-panel" aria-label="Document OCR"><h3>OCR</h3><p className="inline-editor-hint">Convert selected pages into editable text. Offline English recognition estimates text colour and size.</p>
+    <fieldset disabled={running||applying}><legend>Pages</legend><label><input type="radio" name={`ocr-pages-${radioId}`} checked={scope==="whole"} onChange={()=>{setScope("whole");draft.current=null;setResults([]);}}/> Whole document</label><label><input type="radio" name={`ocr-pages-${radioId}`} checked={scope==="specific"} onChange={()=>{setScope("specific");draft.current=null;setResults([]);}}/> Specific pages</label>{scope==="specific"&&<input aria-label="OCR page ranges" value={range} placeholder="1, 3-5" onChange={event=>{setRange(event.target.value);draft.current=null;setResults([]);}}/>}</fieldset>
+    <fieldset disabled={running||applying}><legend>Keep</legend><label><input type="radio" name={`page-ocr-keep-${radioId}`} checked={keep==="image"} onChange={()=>{setKeep("image");draft.current=null;setResults([]);}}/> Text with image</label><label><input type="radio" name={`page-ocr-keep-${radioId}`} checked={keep==="text"} onChange={()=>{setKeep("text");draft.current=null;setResults([]);}}/> Text only</label></fieldset>
+    <label>Layout<select aria-label="Page OCR layout" disabled={running||applying} value={layout} onChange={event=>{setLayout(event.target.value);draft.current=null;setResults([]);}}><option value="auto">Automatic</option><option value="block">One text block</option><option value="sparse">Scattered text</option></select></label>
+    <p className="inline-editor-hint">Text with image keeps original artwork and live text, replacing only detected image ink. Review photographs, watermarks and decorations after conversion. Text only removes page artwork and includes confident recognized text. Low-confidence image words remain visible with Text with image. Pages without detected text are left unchanged.</p>
+    {!running&&<button className="btn primary" disabled={applying} onClick={()=>void run()}>Detect page text</button>}{running&&<><progress max="1" value={progress}/><button className="btn ghost" onClick={cancel}>Cancel page OCR</button></>}
+    {status&&<span role="status">{status}</span>}{results.length>0&&<ul className="ocr-page-results">{results.map(result=><li key={result.page}>Page {result.page}: {result.lines?`${result.lines} lines · ${Math.round(result.confidence)}% confidence`:"No text detected; unchanged"}</li>)}</ul>}
+    {!running&&draft.current&&<button className="btn primary" disabled={applying} onClick={()=>void(async()=>{setApplying(true);try{await apply(draft.current!,results.filter(result=>result.lines>0).map(result=>result.page));onClose();}catch(reason){setError(reason instanceof Error?reason.message:"Couldn't apply page OCR.");}finally{setApplying(false);}})()}>{applying?"Applying OCR…":"Apply OCR to editing session"}</button>}
+    {error&&<p role="alert" className="inline-editor-error">{error}</p>}<button className="btn ghost" disabled={applying} onClick={()=>{cancel();onClose();}}>Close page OCR</button>
+  </section>;
+}

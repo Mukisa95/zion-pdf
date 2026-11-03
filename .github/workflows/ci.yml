@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "ci/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  converters:
+    uses: ./.github/workflows/converter-build.yml
+  build:
+    needs: converters
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32
+          - os: macos-latest
+            platform: darwin
+          - os: ubuntu-latest
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: converter-${{ matrix.platform }}-*
+          path: .converter-build/artifacts
+          merge-multiple: true
+      - name: Unpack offline converters
+        shell: bash
+        run: |
+          mkdir -p conversion/runtime
+          for archive in .converter-build/artifacts/*.tar; do tar -xf "$archive" -C conversion/runtime; done
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run test:chat-math
+      - run: npm run build
+      - name: Smoke test (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: |
+          # Ubuntu 24.04 restricts the user namespaces Chromium's sandbox needs; installed Folio packages
+          # ship an AppArmor profile for this, but the development Electron binary doesn't.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run -a npm run smoke
+          xvfb-run -a npm run test:word-layout
+          npm run test:word-cancel
+      - name: Smoke test
+        if: runner.os != 'Linux'
+        run: |
+          npm run smoke
+          npm run test:word-layout
+          npm run test:word-cancel
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ matrix.os }}
+          path: release/smoke/
+          if-no-files-found: ignore
