@@ -148,7 +148,7 @@ jobs:
           if ! pgrep -f linux-unpacked/zion-pdf > /dev/null; then cat app.log; exit 1; fi
           pkill -f linux-unpacked/zion-pdf
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: folio-${{ matrix.name }}
           path: ${{ matrix.files }}
